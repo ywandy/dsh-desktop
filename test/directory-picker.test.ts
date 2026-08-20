@@ -40,6 +40,13 @@ describe('desktop Electron directory picker', () => {
 
     expect(dependencyPatch).toContain('window.dshDesktopDirectoryPicker')
     expect(dependencyPatch).toContain('DSH Desktop directory picker bridge is unavailable')
+    expect(dependencyPatch).toContain('conversation.hero.workspace.createSource')
+    expect(dependencyPatch).toContain('sidebar.workspaces.createSource')
+    expect(dependencyPatch).toContain('id: "local"')
+    expect(dependencyPatch).toContain('order: 20')
+    expect(dependencyPatch).toContain('本地工作区')
+    expect(dependencyPatch).toContain('Local workspace')
+    expect(dependencyPatch).not.toContain('+\t\t\tctx.slots.inject("conversation.hero.workspace.directoryFlow"')
   })
 
   it('keeps the Host API proxy active when the legacy picker service is absent', async () => {

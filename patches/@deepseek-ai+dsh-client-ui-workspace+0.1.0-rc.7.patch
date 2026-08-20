@@ -1,0 +1,318 @@
+diff --git a/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js
+index ec779d5..d76737a 100644
+--- a/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js
++++ b/node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js
+@@ -811,71 +811,63 @@ window.__ModuleLoader__.load({
+ 		};
+ 		//#endregion
+ 		//#region lib/types/client/WorkspacePicker.js
+-		const ADD_WORKSPACE = "::add-workspace";
++		const CREATE_SOURCE_PREFIX = "::create-source:";
+ 		/**
+ 		* Render the pick menu plus the adoption error dialog.
+ 		* @param props - owner-controlled flow props.
+ 		* @returns menu + dialog elements.
+ 		*/
+-		function WorkspacePickFlow({ t, open, anchorRef, useWorkspaces, createWorkspace, useDirectoryFlow, renderDirectoryFlow, onPick, onClose, addOnly = false, side = "bottom", selectedId }) {
++		function WorkspacePickFlow({ t, open, anchorRef, useWorkspaces, createWorkspace, useCreateSources, renderCreateSource, deferSource, clearDeferredSource, onPick, onClose, addOnly = false, side = "bottom", selectedId }) {
+ 			const workspaceSnapshot = useWorkspaces((state) => state);
+ 			const workspaces = workspaceSnapshot.items;
++			const createSources = useCreateSources((sources) => sources);
+ 			const getAnchorRect = (0, react.useCallback)(() => anchorRef?.current?.getBoundingClientRect() ?? null, [anchorRef]);
+ 			const [errorOpen, setErrorOpen] = (0, react.useState)(false);
+ 			const [modalError, setModalError] = (0, react.useState)(null);
+-			const [flowOpen, setFlowOpen] = (0, react.useState)(false);
++			const [selectedSourceId, setSelectedSourceId] = (0, react.useState)(null);
++			const [retrySourceId, setRetrySourceId] = (0, react.useState)(null);
+ 			const [pickingFolder, setPickingFolder] = (0, react.useState)(false);
+-			const flowBusy = flowOpen || pickingFolder;
+-			const flowAvailable = useDirectoryFlow((occupied) => occupied);
++			const flowBusy = selectedSourceId !== null || pickingFolder;
+ 			(0, react.useEffect)(() => {
+-				if (flowOpen && !flowAvailable) setFlowOpen(false);
+-			}, [flowOpen, flowAvailable]);
+-			const addEntries = flowAvailable ? [{
+-				id: ADD_WORKSPACE,
+-				label: t("menu.addWorkspace"),
++				if (selectedSourceId !== null && !createSources.some((source) => source.id === selectedSourceId)) setSelectedSourceId(null);
++			}, [createSources, selectedSourceId]);
++			const sourceEntries = createSources.map((source) => ({
++				id: `${CREATE_SOURCE_PREFIX}${source.id}`,
++				label: source.label,
+ 				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPlusOutline16, { size: 16 }),
+ 				disabled: flowBusy
+-			}] : [];
++			}));
+ 			const pinAdd = !addOnly && workspaces.length > 0;
+ 			const items = pinAdd ? workspaces.map((workspace) => ({
+ 				id: workspace.workspaceId,
+ 				label: workspace.title,
+ 				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconFolderClose16, { size: 16 }),
+ 				disabled: flowBusy
+-			})) : addEntries;
++			})) : sourceEntries;
+ 			const menuIsEmpty = items.length === 0;
+ 			const closeModal = () => {
+ 				setErrorOpen(false);
+ 				setModalError(null);
+ 			};
+-			/** Adopt a picked directory; failures land in the folder-error dialog (Choose again reopens the flow). */
++			/** Adopt a source directory; failures land in the folder-error dialog (Choose again reruns that source). */
+ 			const adoptDirectory = (path) => createWorkspace({ path }).then((workspace) => {
+-				setFlowOpen(false);
++				setSelectedSourceId(null);
+ 				onPick(workspace.workspaceId);
+ 			}).catch((reason) => {
+ 				setModalError(reason instanceof Error ? reason.message : String(reason));
+-				setFlowOpen(false);
++				setSelectedSourceId(null);
+ 				setErrorOpen(true);
+ 			});
+-			const openDirectoryFlow = (0, react.useCallback)(() => {
++			const openCreateSource = (0, react.useCallback)((sourceId) => {
+ 				onClose();
+ 				setErrorOpen(false);
+ 				setModalError(null);
+-				setFlowOpen(true);
++				setRetrySourceId(sourceId);
++				setSelectedSourceId(sourceId);
+ 			}, [onClose]);
+-			const listSettled = addOnly || workspaceSnapshot.phase === "ready";
+-			const addIsTheOnlyEntry = !pinAdd && listSettled && addEntries.length === 1;
+-			(0, react.useEffect)(() => {
+-				if (open && addIsTheOnlyEntry && !flowBusy) openDirectoryFlow();
+-			}, [
+-				open,
+-				addIsTheOnlyEntry,
+-				flowBusy,
+-				openDirectoryFlow
+-			]);
+ 			/** Owner side of the flow conversation: adopt keeps the flow open (busy) until the Host answers. */
+ 			const flowOwner = {
+-				open: flowOpen,
++				open: selectedSourceId !== null,
+ 				busy: pickingFolder,
+ 				onPicked: (path) => {
+ 					setPickingFolder(true);
+@@ -884,27 +876,37 @@ window.__ModuleLoader__.load({
+ 					});
+ 				},
+ 				onCancel: () => {
+-					setFlowOpen(false);
++					setSelectedSourceId(null);
+ 				},
+ 				onError: (message) => {
+-					setFlowOpen(false);
++					setSelectedSourceId(null);
+ 					setModalError(message);
+ 					setErrorOpen(true);
+ 				}
+ 			};
+ 			const handleSelect = (id) => {
+-				if (id === ADD_WORKSPACE) {
+-					openDirectoryFlow();
++				if (id.startsWith(CREATE_SOURCE_PREFIX)) {
++					const source = createSources.find((candidate) => `${CREATE_SOURCE_PREFIX}${candidate.id}` === id);
++					if (source !== void 0 && source.activation === "submit") {
++						onClose();
++						deferSource(source);
++						return;
++					}
++					if (source !== void 0) {
++						clearDeferredSource();
++						openCreateSource(source.id);
++					}
+ 					return;
+ 				}
++				clearDeferredSource();
+ 				onPick(id);
+ 			};
+ 			return (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+ 				(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Menu, {
+-					open: open && !addIsTheOnlyEntry && !menuIsEmpty,
++					open: open && !menuIsEmpty,
+ 					anchor: null,
+ 					items,
+-					...pinAdd ? { footer: addEntries } : {},
++					...pinAdd ? { footer: sourceEntries } : {},
+ 					selectedId,
+ 					onSelect: handleSelect,
+ 					onClose,
+@@ -912,12 +914,12 @@ window.__ModuleLoader__.load({
+ 					portal: true,
+ 					getAnchorRect
+ 				}),
+-				open && !addIsTheOnlyEntry && !menuIsEmpty && workspaceSnapshot.phase === "pending" && (0, react_jsx_runtime.jsx)("div", {
++				open && !menuIsEmpty && workspaceSnapshot.phase === "pending" && (0, react_jsx_runtime.jsx)("div", {
+ 					className: WorkspacePicker_module_css_default.menuStatus,
+ 					role: "status",
+ 					children: t("picker.loading")
+ 				}),
+-				renderDirectoryFlow(flowOwner),
++				selectedSourceId === null ? null : renderCreateSource(flowOwner, selectedSourceId),
+ 				(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+ 					open: errorOpen,
+ 					onClose: closeModal,
+@@ -931,8 +933,10 @@ window.__ModuleLoader__.load({
+ 					}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+ 						variant: "primary",
+ 						className: WorkspacePicker_module_css_default.modalAction,
+-						disabled: !flowAvailable,
+-						onClick: openDirectoryFlow,
++						disabled: retrySourceId === null || !createSources.some((source) => source.id === retrySourceId),
++						onClick: () => {
++							if (retrySourceId !== null) openCreateSource(retrySourceId);
++						},
+ 						children: t("folderError.retry")
+ 					})] }),
+ 					children: (0, react_jsx_runtime.jsx)("div", {
+@@ -949,15 +953,17 @@ window.__ModuleLoader__.load({
+ 		* @param props - empty-state slot props (owner share + injected creation callback).
+ 		* @returns the flow element.
+ 		*/
+-		function WorkspacePicker({ open, anchorRef, useWorkspaces, selectedId, onPick, onClose, createWorkspace, useDirectoryFlow, renderSlot, t }) {
++		function WorkspacePicker({ open, anchorRef, useWorkspaces, selectedId, onPick, onClose, createWorkspace, useCreateSources, deferSource, clearDeferredSource, renderSlot, t }) {
+ 			return (0, react_jsx_runtime.jsx)(WorkspacePickFlow, {
+ 				t,
+ 				open,
+ 				anchorRef,
+ 				useWorkspaces,
+ 				createWorkspace,
+-				useDirectoryFlow,
+-				renderDirectoryFlow: (owner) => renderSlot("conversation.hero.workspace.directoryFlow", owner),
++				useCreateSources,
++				renderCreateSource: (owner, sourceId) => renderSlot("conversation.hero.workspace.createSource", owner, { only: sourceId }),
++				deferSource,
++				clearDeferredSource,
+ 				selectedId,
+ 				onPick,
+ 				onClose
+@@ -1644,11 +1650,11 @@ window.__ModuleLoader__.load({
+ 		* @param props - composed slot props (shell owner share + store + injected actions).
+ 		* @returns the region element tree.
+ 		*/
+-		function WorkspaceBrowser({ wide, expandSidebar, useSessions, useWorkspaces, useStore, actions, startSession, open, renameSession, forkSession, renameWorkspace, deleteWorkspace, insertWorkspaceBefore, archiveSession, insertSessionBefore, createWorkspace, searchSessions, searchResultLimit, useDirectoryFlow, renderSlot, t }) {
++		function WorkspaceBrowser({ wide, expandSidebar, useSessions, useWorkspaces, useStore, actions, startSession, open, renameSession, forkSession, renameWorkspace, deleteWorkspace, insertWorkspaceBefore, archiveSession, insertSessionBefore, createWorkspace, searchSessions, searchResultLimit, useCreateSources, deferSource, clearDeferredSource, renderSlot, t }) {
+ 			const workspaces = useWorkspaces((state) => state.items);
+ 			const workspacePhase = useWorkspaces((state) => state.phase);
+ 			const archivedSessionIds = useWorkspaces((state) => state.archivedSessionIds);
+-			const directoryFlowAvailable = useDirectoryFlow((occupied) => occupied);
++			const createSources = useCreateSources((sources) => sources);
+ 			const groupBy = useStore((s) => s.groupBy);
+ 			const orderBy = useStore((s) => s.orderBy);
+ 			const groupExpansion = useStore((s) => s.groupExpansion);
+@@ -1927,7 +1933,7 @@ window.__ModuleLoader__.load({
+ 										actions.setOrderBy(mode);
+ 									},
+ 									t
+-								}), directoryFlowAvailable && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
++								}), createSources.length > 0 && (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+ 									label: t("workspace.add"),
+ 									side: "bottom",
+ 									delayMs: 500,
+@@ -1949,8 +1955,10 @@ window.__ModuleLoader__.load({
+ 								anchorRef: wsPlusRef,
+ 								useWorkspaces,
+ 								createWorkspace,
+-								useDirectoryFlow,
+-								renderDirectoryFlow: (owner) => renderSlot("sidebar.workspaces.directoryFlow", owner),
++								useCreateSources,
++								renderCreateSource: (owner, selectedSourceId) => renderSlot("sidebar.workspaces.createSource", owner, { only: selectedSourceId }),
++								deferSource,
++								clearDeferredSource,
+ 								addOnly: true,
+ 								side: "right",
+ 								onPick: (workspaceId) => {
+@@ -2344,13 +2352,52 @@ window.__ModuleLoader__.load({
+ 				if (!result.ok) throw new Error(result.error.message);
+ 				return result.value;
+ 			};
+-			const flowSource = (hole) => ({
+-				getSnapshot: () => ctx.slots.entries(hole).length > 0,
+-				subscribe: (listener) => ctx.slots.subscribe(hole, listener)
+-			});
+-			const browserFlowSource = flowSource("sidebar.workspaces.directoryFlow");
+-			const pickerFlowSource = flowSource("conversation.hero.workspace.directoryFlow");
++			const createSourceLedger = (slot) => {
++				let cachedVersion = -1;
++				let cachedLocaleRevision = -1;
++				let cachedSnapshot = [];
++				return {
++					getSnapshot: () => {
++						const version = ctx.slots.getVersion(slot);
++						const localeRevision = ctx.locale.getSnapshot().revision;
++						if (version !== cachedVersion || localeRevision !== cachedLocaleRevision) {
++							cachedVersion = version;
++							cachedLocaleRevision = localeRevision;
++							cachedSnapshot = ctx.slots.entries(slot).map((entry) => {
++								const sourceInject = entry.inject?.() ?? {};
++								return {
++									id: entry.options.id ?? "",
++									order: entry.options.order ?? 0,
++									label: typeof entry.options.label === "function" ? entry.options.label() : entry.options.label ?? "",
++									activation: entry.options.activation ?? sourceInject.activation ?? "immediate",
++									create: entry.options.create ?? sourceInject.create
++								};
++							}).filter((source) => source.id !== "").sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
++						}
++						return cachedSnapshot;
++					},
++					subscribe: (listener) => {
++						const offSlots = ctx.slots.subscribe(slot, listener);
++						const offLocale = ctx.locale.subscribe(listener);
++						return () => {
++							offSlots();
++							offLocale();
++						};
++					}
++				};
++			};
++			const browserCreateSources = createSourceLedger("sidebar.workspaces.createSource");
++			const pickerCreateSources = createSourceLedger("conversation.hero.workspace.createSource");
++			const deferSource = (source, clearSession) => {
++				if (clearSession) ctx.sessions.clear();
++				ctx.emit("workspace/create-source-deferred", source);
++			};
++			const clearDeferredSource = () => {
++				ctx.emit("workspace/create-source-clear");
++			};
+ 			const browserInjected = () => ({
++				deferSource: (source) => deferSource(source, true),
++				clearDeferredSource,
+ 				startSession: (workspaceId) => {
+ 					ctx.workspaces.startSession(workspaceId);
+ 				},
+@@ -2389,16 +2436,18 @@ window.__ModuleLoader__.load({
+ 					await ctx.workspaces.insertSessionBefore(workspaceId, sessionId, beforeSessionId);
+ 				},
+ 				createWorkspace: (input) => ctx.workspaces.create(input),
+-				hooks: { directoryFlow: browserFlowSource }
++				hooks: { createSources: browserCreateSources }
+ 			});
+ 			const pickerInjected = () => ({
++				deferSource: (source) => deferSource(source, false),
++				clearDeferredSource,
+ 				createWorkspace: (input) => ctx.workspaces.create(input),
+-				hooks: { directoryFlow: pickerFlowSource }
++				hooks: { createSources: pickerCreateSources }
+ 			});
+ 			ctx.slots.inject("sidebar.workspaces", () => ctx.slots.register({
+ 				name: "sidebar.workspaces",
+-				children: { "sidebar.workspaces.directoryFlow": {
+-					kind: "single",
++				children: { "sidebar.workspaces.createSource": {
++					kind: "list",
+ 					scope: "root"
+ 				} },
+ 				store: createWorkspaceViewStore(),
+@@ -2407,8 +2456,8 @@ window.__ModuleLoader__.load({
+ 			}, WorkspaceBrowser));
+ 			ctx.slots.inject("conversation.hero.workspace", () => ctx.slots.register({
+ 				name: "conversation.hero.workspace",
+-				children: { "conversation.hero.workspace.directoryFlow": {
+-					kind: "single",
++				children: { "conversation.hero.workspace.createSource": {
++					kind: "list",
+ 					scope: "root"
+ 				} },
+ 				inject: pickerInjected,

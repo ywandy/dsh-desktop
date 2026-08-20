@@ -1,8 +1,101 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js
-index 1dd0e89..dd1c233 100644
+index 1dd0e89..d71961c 100644
 --- a/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js
-@@ -5233,6 +5233,15 @@ window.__ModuleLoader__.load({
+@@ -1328,6 +1328,92 @@ window.__ModuleLoader__.load({
+ 				}
+ 			}
+ 		};
++		/** Coordinates a source intent that becomes a standalone cwd Session on first submit. */
++		var DeferredSessionCoordinator = class {
++			sessions;
++			pendingShell;
++			conversation;
++			attempt = null;
++			inflight = null;
++			state = (0, _deepseek_ai_dsh_client_runtime_client.createSnapshotStore)({
++				intent: null,
++				phase: "idle",
++				error: null,
++				path: null,
++				sessionId: null
++			});
++			constructor(sessions, pendingShell, conversation) {
++				this.sessions = sessions;
++				this.pendingShell = pendingShell;
++				this.conversation = conversation;
++			}
++			select(source) {
++				this.releasePendingDraft();
++				this.attempt = {
++					intent: source,
++					create: source.create,
++					path: null,
++					sessionId: null
++				};
++				this.publish("ready", null);
++			}
++			clear() {
++				if (this.attempt === null) return;
++				this.attempt = null;
++				this.releasePendingDraft();
++				this.publish("idle", null);
++			}
++			submit(text, imageIds, mode) {
++				if (this.inflight !== null) return this.inflight;
++				const attempt = this.attempt;
++				if (attempt === null || text === "" && imageIds.length === 0) return Promise.resolve();
++				this.inflight = this.run(attempt, text, imageIds, mode).catch((error) => {
++					if (this.attempt !== attempt) return;
++					const message = error instanceof Error ? error.message : String(error);
++					this.pendingShell.notify("error", message);
++					this.publish("error", message);
++				}).finally(() => {
++					this.inflight = null;
++				});
++				return this.inflight;
++			}
++			async run(attempt, text, imageIds, mode) {
++				if (typeof attempt.create !== "function") throw new Error(`workspace source "${attempt.intent.id}" cannot create a directory`);
++				this.publish("creating-directory", null);
++				attempt.path ??= await attempt.create();
++				if (this.attempt !== attempt) return;
++				this.publish("creating-session", null);
++				attempt.sessionId ??= await this.sessions.create({ cwd: attempt.path });
++				if (this.attempt !== attempt) return;
++				const binding = this.sessions.binding(attempt.sessionId);
++				if (binding === void 0) throw new Error(`unknown deferred session "${attempt.sessionId}"`);
++				this.publish("sending", null);
++				const conversation = this.conversation();
++				await conversation.sendSession(binding.session, text, imageIds, mode);
++				if (this.attempt !== attempt) return;
++				this.pendingShell.commitSend(imageIds);
++				this.attempt = null;
++				this.publish("idle", null);
++				this.sessions.open(attempt.sessionId);
++			}
++			publish(phase, error) {
++				const attempt = this.attempt;
++				this.state.set({
++					intent: attempt?.intent ?? null,
++					phase,
++					error,
++					path: attempt?.path ?? null,
++					sessionId: attempt?.sessionId ?? null
++				});
++			}
++			releasePendingDraft() {
++				const imageIds = [...this.pendingShell.snapshot.imageIds];
++				this.pendingShell.commitSend(imageIds);
++				const conversation = this.conversation(false);
++				if (conversation === void 0) return;
++				for (const imageId of imageIds) conversation.releaseDraftImage(imageId);
++			}
++		};
+ 		//#endregion
+ 		//#region lib/types/client/input/hub.js
+ 		/** Session-addressed input facade registry (SessionInputResolver face + composer-layer extras). */
+@@ -5233,6 +5319,15 @@ window.__ModuleLoader__.load({
  			"toBottom": "Md3f7G_toBottom",
  			"scroll": "Md3f7G_scroll"
  		};
@@ -18,7 +111,7 @@ index 1dd0e89..dd1c233 100644
  		//#endregion
  		//#region lib/types/client/chat/ChatNodeSeat.js
  		/** Subscribe and dispatch one stable Context key without observing sibling Nodes. */
-@@ -5289,6 +5298,21 @@ window.__ModuleLoader__.load({
+@@ -5289,6 +5384,21 @@ window.__ModuleLoader__.load({
  			for (const row of list.querySelectorAll("[data-chat-anchor-key]")) if (row.dataset.chatAnchorKey === key) return row;
  			return null;
  		}
@@ -40,7 +133,7 @@ index 1dd0e89..dd1c233 100644
  		/** Row position in scrollport coordinates (viewport-independent). */
  		function flowTop(row, scrollport) {
  			return row.getBoundingClientRect().top - scrollport.getBoundingClientRect().top;
-@@ -5364,6 +5388,106 @@ window.__ModuleLoader__.load({
+@@ -5364,6 +5474,106 @@ window.__ModuleLoader__.load({
  				})]
  			});
  		}
@@ -147,7 +240,7 @@ index 1dd0e89..dd1c233 100644
  		/**
  		* The chat view slot entry: pure component over the composed props; each
  		* ordered business Node crosses the keyed renderer seat.
-@@ -5381,11 +5505,25 @@ window.__ModuleLoader__.load({
+@@ -5381,11 +5591,25 @@ window.__ModuleLoader__.load({
  			const loadingOlder = useSession((s) => s.loadingOlder);
  			const selectedCallId = useStore((s) => s.selection?.callId);
  			const pendingSteering = (0, react.useMemo)(() => inbox.filter((item) => item.placement === "steering"), [inbox]);
@@ -173,7 +266,7 @@ index 1dd0e89..dd1c233 100644
  			/** Last position delivered or written on the main thread. */
  			const observedTopRef = (0, react.useRef)(0);
  			/** Paging anchor: semantic row/position at click, updated by reader scrolls
-@@ -5405,6 +5543,12 @@ window.__ModuleLoader__.load({
+@@ -5405,6 +5629,12 @@ window.__ModuleLoader__.load({
  			const lastNode = lastKey === null ? void 0 : nodeStore.get(lastKey);
  			const lastSteeringId = pendingSteering[pendingSteering.length - 1]?.id ?? null;
  			const followSig = `${openState}:${firstSeq}:${lastKey}:${order.length}:${running ? 1 : 0}:${lastSteeringId ?? ""}`;
@@ -186,7 +279,7 @@ index 1dd0e89..dd1c233 100644
  			const toBottom = (el) => {
  				anchorRef.current = null;
  				el.scrollTop = el.scrollHeight;
-@@ -5412,6 +5556,8 @@ window.__ModuleLoader__.load({
+@@ -5412,6 +5642,8 @@ window.__ModuleLoader__.load({
  				atBottomRef.current = true;
  				setAtBottom(true);
  				chatScroll.save(null);
@@ -195,7 +288,7 @@ index 1dd0e89..dd1c233 100644
  			};
  			(0, react.useLayoutEffect)(() => {
  				const local = listRef.current;
-@@ -5468,6 +5614,7 @@ window.__ModuleLoader__.load({
+@@ -5468,6 +5700,7 @@ window.__ModuleLoader__.load({
  				/* v8 ignore next -- ref-null guard: the handler only fires while mounted. */
  				if (local === null) return;
  				const el = scrollerOf(local);
@@ -203,7 +296,7 @@ index 1dd0e89..dd1c233 100644
  				const floor = Math.max(0, el.scrollHeight - el.clientHeight);
  				const movedByReader = Math.abs(el.scrollTop - Math.min(observedTopRef.current, floor)) > .5;
  				const isAtBottom = movedByReader ? floor - el.scrollTop <= 25 : atBottomRef.current;
-@@ -5487,6 +5634,10 @@ window.__ModuleLoader__.load({
+@@ -5487,6 +5720,10 @@ window.__ModuleLoader__.load({
  				else if (position !== null) chatScroll.save(position);
  				observedTopRef.current = el.scrollTop;
  			};
@@ -214,7 +307,7 @@ index 1dd0e89..dd1c233 100644
  			(0, react.useEffect)(() => {
  				const local = listRef.current;
  				/* v8 ignore next -- ref-null guard: effect runs after the list node commits. */
-@@ -5540,9 +5691,29 @@ window.__ModuleLoader__.load({
+@@ -5540,9 +5777,29 @@ window.__ModuleLoader__.load({
  				}
  				loadOlder();
  			};
@@ -245,7 +338,7 @@ index 1dd0e89..dd1c233 100644
  					ref: listRef,
  					className: ChatView_module_css_default.scroll,
  					children: [(0, react_jsx_runtime.jsxs)("div", {
-@@ -5607,7 +5778,7 @@ window.__ModuleLoader__.load({
+@@ -5607,7 +5864,7 @@ window.__ModuleLoader__.load({
  							children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutline14, {})
  						})
  					})]
@@ -254,3 +347,172 @@ index 1dd0e89..dd1c233 100644
  			});
  		}
  		//#endregion
+@@ -6822,12 +7079,14 @@ window.__ModuleLoader__.load({
+ 		};
+ 		//#endregion
+ 		//#region lib/types/client/skeleton/ConversationRoot.js
+-		function ConversationRoot({ sessionId, useSession, useSessions, useWorkspaces, useInput, useComposerBlock, renderSlot, renderSlotChain, selectWorkspace, t }) {
++		function ConversationRoot({ sessionId, useSession, useSessions, useWorkspaces, useInput, useComposerBlock, useDeferred, usePendingInput, usePendingNotices, usePendingLexicon, usePendingMenuLauncher, pendingComposer, clearDeferred, renderSlot, renderSlotChain, selectWorkspace, t }) {
+ 			const openState = useSession((s) => s.openState);
+ 			const composerPhase = useSession((s) => s.composerPhase);
+ 			const pending = useSession((s) => s.pending) ?? [];
+ 			const session = useSession((s) => s);
+ 			const inputState = useInput((s) => s);
++			const deferredState = useDeferred((s) => s);
++			const pendingInputState = usePendingInput((s) => s);
+ 			const cwd = useSessions((s) => sessionId === void 0 ? void 0 : s.byId[sessionId]?.cwd);
+ 			const summaryBlank = useSessions((s) => sessionId === void 0 ? void 0 : s.byId[sessionId]?.blank);
+ 			const workspaces = useWorkspaces((s) => s);
+@@ -6836,6 +7095,7 @@ window.__ModuleLoader__.load({
+ 			const [pendingWorkspaceId, setPendingWorkspaceId] = (0, react.useState)();
+ 			const pickerAnchor = (0, react.useRef)(null);
+ 			const seatObserver = (0, react.useRef)(null);
++			const deferredOrigin = (0, react.useRef)(null);
+ 			const seatResizeRef = (0, react.useCallback)((seat) => {
+ 				seatObserver.current?.disconnect();
+ 				seatObserver.current = null;
+@@ -6848,6 +7108,18 @@ window.__ModuleLoader__.load({
+ 			}, []);
+ 			const sessionWorkspace = sessionId === void 0 ? void 0 : workspaces.items.find((workspace) => workspace.sessionIds.includes(sessionId));
+ 			const pendingWorkspace = workspaces.items.find((workspace) => workspace.workspaceId === pendingWorkspaceId);
++			const pendingActive = deferredState.intent !== null;
++			(0, react.useEffect)(() => {
++				if (!pendingActive) {
++					deferredOrigin.current = null;
++					return;
++				}
++				if (deferredOrigin.current === null) {
++					deferredOrigin.current = { sessionId };
++					return;
++				}
++				if (deferredOrigin.current.sessionId !== sessionId) clearDeferred();
++			}, [pendingActive, sessionId, clearDeferred]);
+ 			(0, react.useEffect)(() => {
+ 				if (pendingWorkspaceId === void 0) return;
+ 				if (sessionWorkspace?.workspaceId === pendingWorkspaceId || workspaces.phase === "ready" && pendingWorkspace === void 0) setPendingWorkspaceId(void 0);
+@@ -6857,13 +7129,14 @@ window.__ModuleLoader__.load({
+ 				workspaces.phase,
+ 				pendingWorkspace
+ 			]);
+-			const settling = sessionId !== void 0 && composerPhase === "blank" && openState === "loading" && summaryBlank !== true;
+-			const hero = sessionId === void 0 || composerPhase === "blank" && (openState === "open" || summaryBlank === true);
+-			const zone = session === void 0 || inputState === void 0 ? void 0 : {
++			const settling = !pendingActive && sessionId !== void 0 && composerPhase === "blank" && openState === "loading" && summaryBlank !== true;
++			const hero = pendingActive || sessionId === void 0 || composerPhase === "blank" && (openState === "open" || summaryBlank === true);
++			const activeInputState = pendingActive ? pendingInputState : inputState;
++			const zone = pendingActive || session === void 0 || activeInputState === void 0 ? void 0 : {
+ 				session,
+-				input: inputState
++				input: activeInputState
+ 			};
+-			const chipTitle = pendingWorkspace?.title ?? (sessionId === void 0 ? void 0 : sessionWorkspace?.title ?? (workspaces.phase === "ready" || cwd === void 0 || cwd === "" ? void 0 : workspaceLabel(cwd)));
++			const chipTitle = deferredState.intent?.label ?? pendingWorkspace?.title ?? (sessionId === void 0 ? void 0 : sessionWorkspace?.title ?? (workspaces.phase === "ready" || cwd === void 0 || cwd === "" ? void 0 : workspaceLabel(cwd)));
+ 			const heroWorkspaceRow = (0, react_jsx_runtime.jsxs)("div", {
+ 				className: ConversationRoot_module_css_default.heroWorkspaceRow,
+ 				children: [
+@@ -6894,9 +7167,23 @@ window.__ModuleLoader__.load({
+ 					renderSlot("conversation.hero.agentPreset", {})
+ 				]
+ 			});
+-			const inert = sessionId === void 0 || hero && chipTitle === void 0;
++			const inert = !pendingActive && (sessionId === void 0 || hero && chipTitle === void 0);
+ 			const inputBar = renderSlot("conversation.composer.bar", {
+ 				variant: hero ? "hero" : "composer",
++				...pendingActive ? {
++					useInput: usePendingInput,
++					inputActions: pendingComposer.inputActions,
++					keyboard: pendingComposer.keyboard,
++					addImages: pendingComposer.addImages,
++					removeImage: pendingComposer.removeImage,
++					draftImages: pendingComposer.draftImages,
++					toggleCommandMenu: void 0,
++					stop: void 0,
++					command: void 0,
++					useNotices: usePendingNotices,
++					useLexicon: usePendingLexicon,
++					useMenuLauncher: usePendingMenuLauncher
++				} : {},
+ 				...inert ? {
+ 					disabled: true,
+ 					placeholder: t("placeholder.workspace"),
+@@ -6904,7 +7191,7 @@ window.__ModuleLoader__.load({
+ 					onRequestWorkspace: () => {
+ 						setPickerOpen(true);
+ 					}
+-				} : !inert && composerBlock !== void 0 ? {
++				} : !pendingActive && composerBlock !== void 0 ? {
+ 					blocked: composerBlock,
+ 					placeholder: composerBlock.reason
+ 				} : hero ? { placeholder: t("placeholder.hero") } : {},
+@@ -9540,6 +9827,53 @@ window.__ModuleLoader__.load({
+ 			};
+ 			const inputHub = new InputHub(ctx, t);
+ 			const composerBlocks = new ComposerBlockRegistry();
++			let deferred;
++			const pendingShell = new SessionInputShell({
++				actx: ctx,
++				inputTriggers: () => void 0,
++				popup: () => void 0,
++				defaultSink: (text, imageIds, mode) => deferred.submit(text, imageIds, mode),
++				steerQueue: () => {}
++			});
++			const deferredConversation = (required = true) => {
++				const conversation = ctx.get("conversation");
++				if (conversation === void 0 && required) throw new Error("ui-conversation: conversation service unavailable");
++				return conversation;
++			};
++			deferred = new DeferredSessionCoordinator(sessions, pendingShell, deferredConversation);
++			const clearDeferred = () => {
++				deferred.clear();
++			};
++			const pendingComposer = {
++				keyboard: pendingShell,
++				inputActions: pendingShell.actions,
++				addImages: (files) => {
++					try {
++						const conversation = deferredConversation();
++						const images = conversation.createDraftImages(files);
++						if (!pendingShell.addImages(images.map((image) => image.id))) conversation.releaseDraftImages(images);
++						return null;
++					} catch (error) {
++						if (error instanceof UnsupportedImageMediaTypeError) return t("image.unsupportedType");
++						return error instanceof Error ? error.message : String(error);
++					}
++				},
++				removeImage: (id) => {
++					deferredConversation().releaseDraftImage(id);
++					pendingShell.removeImage(id);
++				},
++				draftImages: (ids) => deferredConversation().draftImages(ids)
++			};
++			ctx.effect(() => ctx.on("workspace/create-source-deferred", (source) => {
++				deferred.select(source);
++			}), "ui-conversation: deferred workspace source");
++			ctx.effect(() => ctx.on("workspace/create-source-clear", () => {
++				deferred.clear();
++			}), "ui-conversation: clear deferred workspace source");
++			ctx.effect(() => () => {
++				deferred.clear();
++				pendingShell.dispose();
++			}, "ui-conversation: pending workspace composer");
+ 			ctx.effect(() => sessions.provide({
+ 				hooks: ["input"],
+ 				props: ["inputActions"],
+@@ -9601,7 +9935,16 @@ window.__ModuleLoader__.load({
+ 					}
+ 				},
+ 				inject: (sessionId) => ({
+-					hooks: { composerBlock: sessionId === void 0 ? ABSENT_BLOCK : composerBlocks.storeFor(sessionId) },
++					hooks: {
++						composerBlock: sessionId === void 0 ? ABSENT_BLOCK : composerBlocks.storeFor(sessionId),
++						deferred: deferred.state,
++						pendingInput: pendingShell.state,
++						pendingNotices: pendingShell.notices,
++						pendingLexicon: pendingShell.lexicon,
++						pendingMenuLauncher: ABSENT_MENU_LAUNCHER
++					},
++					pendingComposer,
++					clearDeferred,
+ 					selectWorkspace: async (workspaceId) => {
+ 						const nextId = await workspaces.connectWorkspace(workspaceId);
+ 						if (sessionId !== void 0 && nextId !== sessionId) {

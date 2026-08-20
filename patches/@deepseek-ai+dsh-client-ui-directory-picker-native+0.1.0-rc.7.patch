@@ -1,17 +1,55 @@
 diff --git a/node_modules/@deepseek-ai/dsh-client-ui-directory-picker-native/lib/client.js b/node_modules/@deepseek-ai/dsh-client-ui-directory-picker-native/lib/client.js
-index ec4b6fa..380e876 100644
+index ec4b6fa..b74aabc 100644
 --- a/node_modules/@deepseek-ai/dsh-client-ui-directory-picker-native/lib/client.js
 +++ b/node_modules/@deepseek-ai/dsh-client-ui-directory-picker-native/lib/client.js
-@@ -60,7 +60,11 @@ window.__ModuleLoader__.load({
+@@ -51,24 +51,40 @@ window.__ModuleLoader__.load({
+ 		}
+ 		//#endregion
+ 		//#region lib/types/client/index.js
+-		/** Required services (cordis fiber inject): the slot registry and the wire-facing workspace service. */
+-		const inject = ["slots", "workspaces"];
++		/** Required services (cordis fiber inject): the slot registry and locale service. */
++		const inject = ["slots", "locale"];
++		const NS = "desktop.directoryPicker";
++		const dictionaries = {
++			zh: { localWorkspace: "本地工作区" },
++			en: { localWorkspace: "Local workspace" }
++		};
+ 		/**
+-		* Client plugin body: register the renderless native flow into both
+-		* directory-flow holes through `slots.inject()` because the ui-workspace
++		* Client plugin body: register the renderless native flow as the local
++		* source in both create-source lists through `slots.inject()` because the ui-workspace
+ 		* entries may activate later or replace their declarations.
  		* @param ctx - client root context.
  		*/
  		function apply(ctx) {
 -			const injected = () => ({ pick: () => ctx.workspaces.pickDirectory() });
+-			ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {
++			ctx.effect(() => ctx.locale.register(NS, dictionaries), "desktop directory picker: dictionaries");
++			const t = ctx.locale.bind(NS);
 +			const injected = () => ({ pick: () => {
 +				const bridge = window.dshDesktopDirectoryPicker;
 +				if (!bridge || typeof bridge.pick !== "function") return Promise.reject(new Error("DSH Desktop directory picker bridge is unavailable"));
 +				return bridge.pick();
 +			} });
- 			ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {
++			const options = (name) => ({
++				name,
++				id: "local",
++				order: 20,
++				label: () => t("localWorkspace"),
++				inject: injected
++			});
++			ctx.slots.inject("conversation.hero.workspace.createSource", () => ctx.slots.inject("sidebar.workspaces.createSource", function* () {
  				yield ctx.slots.register({
- 					name: "conversation.hero.workspace.directoryFlow",
+-					name: "conversation.hero.workspace.directoryFlow",
+-					inject: injected
++					...options("conversation.hero.workspace.createSource")
+ 				}, NativeDirectoryFlow);
+ 				yield ctx.slots.register({
+-					name: "sidebar.workspaces.directoryFlow",
+-					inject: injected
++					...options("sidebar.workspaces.createSource")
+ 				}, NativeDirectoryFlow);
+ 			}));
+ 		}
